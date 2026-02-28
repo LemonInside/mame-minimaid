@@ -25278,6 +25278,7 @@ dstagea
 ddrexpro                        // 2018 - Dance Dance Revolution Extreme Pro (hack, v2)
 ddrexproc                       // 2019 - Dance Dance Revolution Extreme Clarity (hack)
 ddrexplus                       // 2019 - Dance Dance Revolution Extreme Plus (hack)
+ddrmegamix
 sys573
 
 @source:konami/labyrunr.cpp
