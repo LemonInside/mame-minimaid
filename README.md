@@ -1,3 +1,5 @@
+# this is fork of orginal mame with added minimaid lights into to ksys573 driver. There is also a static library for Win x64. 
+
 # MAME
 
 ## What is MAME?
