@@ -377,7 +377,7 @@ Notes: (all ICs shown)
 /*
  * Minimaid stuff 
  */
-#include "../../../3rdparty/mmmagic/mmmagic.h"
+#include "../../../3rdparty/libmmmagic/mmagic.h"
 bool m_minimaid_ok = false;
 
 #define LOG_CDROM    (1U << 1)
