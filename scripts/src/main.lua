@@ -163,7 +163,11 @@ end
 		"ymfm",
 		ext_lib("jpeg"),
 		"7z",
+		"mmmagic",
 	}
+	
+	libdirs { MAME_DIR .. "3rdparty/libmmmagic" }
+	
 if CPU_INCLUDE_DRC_NATIVE then
 	links {
 		"asmjit",
