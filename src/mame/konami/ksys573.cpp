@@ -372,6 +372,14 @@ Notes: (all ICs shown)
 
 #include "pnchmn.lh"
 
+
+
+/*
+ * Minimaid stuff 
+ */
+#include "../../../3rdparty/mmmagic/mmmagic.h"
+bool m_minimaid_ok = false;
+
 #define LOG_CDROM    (1U << 1)
 #define LOG_CONTROL  (1U << 2)
 #define LOG_SECURITY (1U << 3)
@@ -506,7 +514,7 @@ public:
 		m_ds2401_id(*this, "ds2401_id"),
 		m_duart(*this, "mb89371")
 	{ }
-
+	
 	void drmn9m(machine_config &config);
 	void drmn10m(machine_config &config);
 	void gtfrk10m(machine_config &config);
@@ -1104,11 +1112,16 @@ void ksys573_state::driver_start()
 
 void ksys573_state::machine_start()
 {
-	m_lamps.resolve();
+	
+	m_lamps.resolve();	
 }
 
 void ksys573_state::machine_reset()
 {
+    mm_connect_minimaid();  
+	//if (m_minimaid_ok) mm_connect_minimaid();  // this calls mm_init() internally
+	//if (m_minimaid_ok) mm_setKB(true);		   // enable keyboard
+	
 	m_n_security_control = 0;
 	m_control = 0;
 
@@ -1125,6 +1138,7 @@ void ksys573_state::machine_reset()
 	{
 		m_duart->write_cts<0>(CLEAR_LINE);
 	}
+	
 }
 
 // H8 check at startup (JVS related)
@@ -1437,22 +1451,34 @@ ioport_value ddr_state::gn845pwbb_read()
 
 void ddr_state::ddr_output_callback(offs_t offset, uint8_t data)
 {
+//	if (!m_minimaid_ok)	return; //if we don't have minimaid, return. 
+	
+	bool mm_changed = false;	//do we need to update lights?
+	
 	switch( offset )
 	{
 	case 0:
 		output().set_value( "foot 1p up", !data );
+		mm_setDDRPad1Light(DDR_DOUBLE_PAD_UP, !data);
+		mm_changed = true;
 		break;
 
 	case 1:
 		output().set_value( "foot 1p left", !data );
+		mm_setDDRPad1Light(DDR_DOUBLE_PAD_LEFT, !data);
+		mm_changed = true;
 		break;
 
 	case 2:
 		output().set_value( "foot 1p right", !data );
+		mm_setDDRPad1Light(DDR_DOUBLE_PAD_RIGHT, !data);
+		mm_changed = true;
 		break;
 
 	case 3:
 		output().set_value( "foot 1p down", !data );
+		mm_setDDRPad1Light(DDR_DOUBLE_PAD_DOWN, !data);
+		mm_changed = true;
 		break;
 
 	case 4:
@@ -1465,18 +1491,26 @@ void ddr_state::ddr_output_callback(offs_t offset, uint8_t data)
 
 	case 8:
 		output().set_value( "foot 2p up", !data );
+		mm_setDDRPad2Light(DDR_DOUBLE_PAD_UP, !data);
+		mm_changed = true;
 		break;
 
 	case 9:
 		output().set_value( "foot 2p left", !data );
+		mm_setDDRPad2Light(DDR_DOUBLE_PAD_LEFT, !data);
+		mm_changed = true;
 		break;
 
 	case 10:
 		output().set_value( "foot 2p right", !data );
+		mm_setDDRPad2Light(DDR_DOUBLE_PAD_RIGHT, !data);
+		mm_changed = true;
 		break;
 
 	case 11:
 		output().set_value( "foot 2p down", !data );
+		mm_setDDRPad2Light(DDR_DOUBLE_PAD_DOWN, !data);
+		mm_changed = true;
 		break;
 
 	case 12:
@@ -1489,37 +1523,55 @@ void ddr_state::ddr_output_callback(offs_t offset, uint8_t data)
 
 	case 17:
 		m_lamps[0] = data ? 0 : 1; // start 1
+		mm_setDDRCabinetLight(DDR_DOUBLE_PLAYER1_PANEL, data ? 0 : 1);
+		mm_changed = true;
 		break;
 
 	case 18:
 		m_lamps[1] = data ? 0 : 1; // start 2
+		mm_setDDRCabinetLight(DDR_DOUBLE_PLAYER2_PANEL, data ? 0 : 1);
+		mm_changed = true;
 		break;
 
 	case 20:
 		output().set_value( "body right low", !data );
+		mm_setDDRCabinetLight(DDR_DOUBLE_MARQUEE_LOWER_RIGHT, !data);
+		mm_changed = true;
 		break;
 
 	case 21:
 		output().set_value( "body left low", !data );
+		mm_setDDRCabinetLight(DDR_DOUBLE_MARQUEE_LOWER_LEFT, !data);
+		mm_changed = true;
 		break;
 
 	case 22:
 		output().set_value( "body left high", !data );
+		mm_setDDRCabinetLight(DDR_DOUBLE_MARQUEE_UPPER_LEFT, !data);
+		mm_changed = true;
 		break;
 
 	case 23:
 		output().set_value( "body right high", !data );
+		mm_setDDRCabinetLight(DDR_DOUBLE_MARQUEE_UPPER_RIGHT, !data);
+		mm_changed = true;
 		break;
 
 	case 28: // digital
 	case 30: // analogue
 		output().set_value( "speaker", !data );
+		mm_setDDRBassLight(DDR_DOUBLE_BASS_LIGHTS, !data);
+		mm_changed = true;
 		break;
 
 	default:
 //      printf( "%d=%d\n", offset, data );
 		break;
 	}
+	
+//	if (mm_changed && m_minimaid_ok) mm_sendDDRMiniMaidUpdate();
+	if (mm_changed) mm_sendDDRMiniMaidUpdate();
+
 }
 
 void ddr_state::machine_start()
@@ -1527,7 +1579,7 @@ void ddr_state::machine_start()
 	ksys573_state::machine_start();
 
 	m_stage_mask = 0xffffffff;
-
+	
 	save_item(NAME(m_stage_mask));
 	save_item(STRUCT_MEMBER(m_stage_state, DO));
 	save_item(STRUCT_MEMBER(m_stage_state, clk));
@@ -1538,6 +1590,8 @@ void ddr_state::machine_start()
 
 void ddr_state::init_ddr()
 {
+	mm_connect_minimaid();  // this calls mm_init() internally and enables keyboard
+	//if (m_minimaid_ok) mm_setKB(true);		// enable keyboard
 	gx700pwfbf_init(gx700pwfbf_output_delegate(&ddr_state::ddr_output_callback, this));
 }
 
