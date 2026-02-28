@@ -377,7 +377,7 @@ Notes: (all ICs shown)
 /*
  * Minimaid stuff 
  */
-#include "../../../3rdparty/libmmmagic/mmagic.h"
+#include "../../../3rdparty/mmmagic/mmmagic.h"
 bool m_minimaid_ok = false;
 
 #define LOG_CDROM    (1U << 1)
@@ -487,6 +487,7 @@ public:
 		m_maincpu(*this, "maincpu"),
 		m_sys573_jvs_host(*this, "sys573_jvs_host"),
 		m_k573dio(*this, "k573dio"),
+		m_ram(*this, "maincpu:ram"),
 		m_lamps(*this, "lamp%u", 0U),
 		m_analog0(*this, "analog0"),
 		m_analog1(*this, "analog1"),
@@ -499,7 +500,6 @@ public:
 		m_pccard2(*this, "pccard2"),
 		m_pccard_cd{ 1, 1 },
 		m_h8_response(*this, "h8_response"),
-		m_ram(*this, "maincpu:ram"),
 		m_flashbank(*this, "flashbank"),
 		m_in2(*this, "IN2"),
 		m_out1(*this, "OUT1"),
@@ -622,7 +622,7 @@ protected:
 	required_device<psxcpu_device> m_maincpu;
 	required_device<sys573_jvs_host> m_sys573_jvs_host;
 	optional_device<k573dio_device> m_k573dio;
-
+	required_device<ram_device> m_ram;
 	output_finder<2> m_lamps;
 
 private:
@@ -726,7 +726,6 @@ private:
 	uint8_t m_jvs_input_buffer[512];
 	uint8_t m_jvs_output_buffer[512];
 
-	required_device<ram_device> m_ram;
 	required_device<address_map_bank_device> m_flashbank;
 	required_ioport m_in2;
 	required_ioport m_out1;
@@ -764,6 +763,7 @@ public:
 	void ddr3mp(machine_config &config);
 	void ddrusa(machine_config &config);
 	void ddr5m(machine_config &config);
+	void ddrexplus(machine_config &config);
 
 	// Dancing Stage analog
 	void dsfdcta(machine_config &config);
@@ -781,6 +781,7 @@ public:
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
+	virtual void machine_reset() override ATTR_COLD;
 
 private:
 	struct stage_state
@@ -801,6 +802,17 @@ private:
 
 	uint32_t m_stage_mask;
 	stage_state m_stage_state[2];
+	
+	////////////////
+	// for ddrexplus
+	void set_explus_clock_scale(uint32_t speed);
+	uint8_t explus_speed_inc1();
+	uint8_t explus_speed_inc2();
+	uint8_t explus_speed_normal();
+	void sys573_vblank(int state);
+
+	bool m_is_ddrexplus_init_done;
+	
 };
 
 
@@ -1116,12 +1128,19 @@ void ksys573_state::machine_start()
 	m_lamps.resolve();	
 }
 
+void ddr_state::machine_reset()
+{
+	ksys573_state::machine_reset();
+
+	m_is_ddrexplus_init_done = false;
+	
+	mm_connect_minimaid();  
+	
+}
+
 void ksys573_state::machine_reset()
 {
-    mm_connect_minimaid();  
-	//if (m_minimaid_ok) mm_connect_minimaid();  // this calls mm_init() internally
-	//if (m_minimaid_ok) mm_setKB(true);		   // enable keyboard
-	
+  	
 	m_n_security_control = 0;
 	m_control = 0;
 
@@ -1139,6 +1158,60 @@ void ksys573_state::machine_reset()
 		m_duart->write_cts<0>(CLEAR_LINE);
 	}
 	
+}
+
+void ddr_state::set_explus_clock_scale(uint32_t speed)
+{
+	auto mas3507d = m_k573dio->subdevice<mas3507d_device>("mpeg");
+	if (mas3507d == nullptr)
+		return;
+
+	// For the DDR Extreme Plus hack
+	// The game is capable of switching between 3 different crystals to change the playback speed
+	double scale = speed / double(29'450'000);
+	mas3507d->set_clock_scale(scale);
+}
+
+uint8_t ddr_state::explus_speed_inc1()
+{
+	set_explus_clock_scale(33'000'000);
+	return 0x00;
+}
+
+uint8_t ddr_state::explus_speed_inc2()
+{
+	set_explus_clock_scale(36'000'000);
+	return 0x55;
+}
+
+uint8_t ddr_state::explus_speed_normal()
+{
+	set_explus_clock_scale(29'500'000);
+	return 0xaa;
+}
+
+void ddr_state::sys573_vblank(int state)
+{
+	if(strcmp(machine().system().name, "ddrexplus") == 0)
+	{
+		if (!m_is_ddrexplus_init_done)
+		{
+			m_maincpu->space(AS_PROGRAM).install_read_handler(0x1fc4080f, 0x1fc40810, read8smo_delegate(*this, FUNC(ddr_state::explus_speed_inc1)));
+			m_maincpu->space(AS_PROGRAM).install_read_handler(0x1fc40ebe, 0x1fc40ebf, read8smo_delegate(*this, FUNC(ddr_state::explus_speed_normal)));
+			m_maincpu->space(AS_PROGRAM).install_read_handler(0x1fc41340, 0x1fc41341, read8smo_delegate(*this, FUNC(ddr_state::explus_speed_inc2)));
+			m_is_ddrexplus_init_done = true;
+		}
+
+		uint32_t *p_n_psxram = (uint32_t*)m_ram->pointer();
+
+		// Hack until a proper modboard BIOS can be found.
+		// The install CD checks the last byte of the BIOS checksum
+		// to determine if it's the proper BIOS or not.
+		if(p_n_psxram[0x30bc40 / 4] == 0x10430005)
+		{
+			p_n_psxram[0x30bc40 / 4] = 0x10000005;
+		}
+	}
 }
 
 // H8 check at startup (JVS related)
@@ -2715,6 +2788,14 @@ void ddr_state::ddr5m(machine_config &config)
 	KONAMI_573_MEMORY_CARD_READER(config, "k573mcr", 0, m_sys573_jvs_host);
 }
 
+void ddr_state::ddrexplus(machine_config &config)
+{
+	ddr5m(config);
+
+	auto screen = subdevice<screen_device>("screen");
+	screen->screen_vblank().set(FUNC(ddr_state::sys573_vblank));
+}
+
 // Dancing Stage
 
 void ddr_state::dsfdct(machine_config &config)
@@ -3770,6 +3851,64 @@ ROM_START( ddrextrm )
 
 	DISK_REGION( "runtime" )
 	DISK_IMAGE_READONLY( "c36jaa02", 0, BAD_DUMP SHA1(edeb45fff0e66151b1ba2fd67542064ccddb031e) )
+ROM_END
+
+ROM_START( ddrexpro )
+	SYS573_BIOS_A
+
+	ROM_REGION( 0x0001014, "cassette:game:eeprom", 0 )
+	ROM_LOAD( "gcc36ja.u1",   0x000000, 0x001014, BAD_DUMP CRC(c1601287) SHA1(929691a78f7bb6dd830f832f301116df0da1619b) )
+
+	ROM_REGION( 0x000008, "cassette:game:id", 0 )
+	ROM_LOAD( "gcc36ja.u6",   0x000000, 0x000008, BAD_DUMP CRC(ce84419e) SHA1(839e8ee080ecfc79021a06417d930e8b32dfc6a1) )
+
+	DISK_REGION( "cdrom0" )
+	DISK_IMAGE_READONLY( "extremepro-version2-cd", 0, SHA1(078eb08b6e0c8047ba68ba5e05f5377e0e17bc85) )
+ROM_END
+
+ROM_START( ddrexproc )
+	SYS573_BIOS_A
+
+	ROM_REGION( 0x0001014, "cassette:game:eeprom", 0 )
+	ROM_LOAD( "gcc36ja.u1",   0x000000, 0x001014, BAD_DUMP CRC(c1601287) SHA1(929691a78f7bb6dd830f832f301116df0da1619b) )
+
+	ROM_REGION( 0x000008, "cassette:game:id", 0 )
+	ROM_LOAD( "gcc36ja.u6",   0x000000, 0x000008, BAD_DUMP CRC(ce84419e) SHA1(839e8ee080ecfc79021a06417d930e8b32dfc6a1) )
+
+	DISK_REGION( "cdrom0" )
+	DISK_IMAGE_READONLY( "extremepro-version2-clarity-cd", 0, SHA1(b13562f4be169048df4dfa624fe9f212bb924d97) )
+ROM_END
+
+ROM_START( ddrexplus )
+	SYS573_BIOS_A
+
+	ROM_REGION( 0x000008c, "cassette:game:eeprom", 0 )
+	ROM_LOAD( "gcc36ja.u1",   0x000000, 0x00008c, BAD_DUMP CRC(197845c2) SHA1(c6c1c192f69331232a93ec6c690257e57a244e25) )
+
+	ROM_REGION( 0x000008, "cassette:game:id", 0 )
+	ROM_LOAD( "gcc36ja.u6",   0x000000, 0x000008, BAD_DUMP CRC(ce84419e) SHA1(839e8ee080ecfc79021a06417d930e8b32dfc6a1) )
+
+	DISK_REGION( "install" )
+	DISK_IMAGE_READONLY( "ddrexplus_install", 0, SHA1(d49e4a27dc36e6a9614490558a9a7ee7951caf3f) )
+
+	DISK_REGION( "runtime" )
+	DISK_IMAGE_READONLY( "ddrexplus_game", 0, SHA1(f58b0418b5fbe29eb1f84af42b55c53226c2e0ad) )
+ROM_END
+
+ROM_START( ddrmegamix )
+	SYS573_BIOS_A
+
+	ROM_REGION( 0x000008c, "cassette:game:eeprom", 0 )
+	ROM_LOAD( "gcc36ja.u1",   0x000000, 0x00008c, BAD_DUMP CRC(197845c2) SHA1(c6c1c192f69331232a93ec6c690257e57a244e25) )
+
+	ROM_REGION( 0x000008, "cassette:game:id", 0 )
+	ROM_LOAD( "gcc36ja.u6",   0x000000, 0x000008, BAD_DUMP CRC(ce84419e) SHA1(839e8ee080ecfc79021a06417d930e8b32dfc6a1) )
+
+	DISK_REGION( "install" )
+	DISK_IMAGE_READONLY( "ddrmegamix_install", 0, SHA1(f988b1007a4e55174e87dc0e3398c124341a7f84) )
+
+	DISK_REGION( "runtime" )
+	DISK_IMAGE_READONLY( "ddrmegamix_game", 0, SHA1(f73938832820b116635661f03057bc150b80c3df) )
 ROM_END
 
 ROM_START( ddru )
@@ -6486,6 +6625,10 @@ GAME( 2002, gtrfrk8m,  sys573,   gtrfrk7m,   gtrfrks,   ksys573_state, empty_ini
 GAME( 2002, gtrfrk8ma, gtrfrk8m, gtrfrk7m,   gtrfrks,   ksys573_state, empty_init,    ROT0,  "Konami", "Guitar Freaks 8th Mix (G*C08 VER. JAA)", MACHINE_IMPERFECT_SOUND | MACHINE_NOT_WORKING ) /* BOOT VER 1.95 */
 GAME( 2002, dsem2,     sys573,   dsem2,      ddr,       ddr_state,     empty_init,    ROT0,  "Konami", "Dancing Stage Euro Mix 2 (G*C23 VER. EAA)", MACHINE_IMPERFECT_SOUND | MACHINE_NOT_WORKING ) /* BOOT VER 1.95 */
 GAME( 2002, ddrextrm,  sys573,   ddr5m,      ddr,       ddr_state,     empty_init,    ROT0,  "Konami", "Dance Dance Revolution Extreme (G*C36 VER. JAA)", MACHINE_IMPERFECT_SOUND | MACHINE_NOT_WORKING ) /* BOOT VER 1.95 */
+GAME( 2018, ddrexpro,  sys573,   ddr5m,      ddr,       ddr_state,     empty_init,    ROT0,  "hack",   "Dance Dance Revolution Extreme Pro (hack, v2)", MACHINE_IMPERFECT_SOUND )
+GAME( 2019, ddrexproc, sys573,   ddr5m,      ddr,       ddr_state,     empty_init,    ROT0,  "hack",   "Dance Dance Revolution Extreme Clarity (hack)", MACHINE_IMPERFECT_SOUND )
+GAME( 2019, ddrexplus, sys573,   ddrexplus,  ddr,       ddr_state,     empty_init,    ROT0,  "hack",   "Dance Dance Revolution Extreme Plus (hack)", MACHINE_IMPERFECT_SOUND )
+GAME( 200?, ddrmegamix,sys573,   ddr5m,      ddr,       ddr_state,     empty_init,    ROT0,  "hack",   "Dance Dance Revolution Megamix (hack)", MACHINE_IMPERFECT_SOUND )
 GAME( 2003, pcnfrk8m,  sys573,   drmn4m,     drmn,      ksys573_state, empty_init,    ROT0,  "Konami", "Percussion Freaks 8th Mix (G*C38 VER. AAA)", MACHINE_IMPERFECT_SOUND ) /* BOOT VER 1.95 */
 GAME( 2003, drmn8m,    pcnfrk8m, drmn4m,     drmn,      ksys573_state, empty_init,    ROT0,  "Konami", "DrumMania 8th Mix (G*C38 VER. JAA)", MACHINE_IMPERFECT_SOUND | MACHINE_NOT_WORKING ) /* BOOT VER 1.95 */
 GAME( 2003, gtrfrk9m,  sys573,   gtrfrk7m,   gtrfrks,   ksys573_state, empty_init,    ROT0,  "Konami", "Guitar Freaks 9th Mix (G*C39 VER. JAA)", MACHINE_IMPERFECT_SOUND | MACHINE_NOT_WORKING ) /* BOOT VER 1.95 */
